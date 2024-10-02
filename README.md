@@ -3,13 +3,18 @@ the structure of such a database looks like:
 ```
 database
   - .properties
-    - table_1.yaml
-  - table_1
-    - first_item.md
-    - second_item.md
+    - notes.yaml
+  - notes
+    - notacular.md
+    - second_note.md
+    - third_note.md
 ```
 
+the filename is the item name. for example, `notacular.md` is an item in the `notes` table called `notacular`. there can only one instance of every name per table, preventing duplicates from being created in the first place.
+
 every markdown file has properties at the top, as well as the normal content of the file below it. that looks like this:
+
+`notes/notacular.md`
 ```markdown
 ---
 pinned: true
@@ -24,6 +29,8 @@ wow!
 the markdown files can be edited using any text editor, and will still work just fine within the database if you do! any time the database is loaded and then saved using this library, it'll fix any missing properties, remove properties that aren't supposed to be there, and so on.
 
 the properties of each table is defined in a simple human-readable yaml file, which looks like:
+
+`.properties/notes.yaml`
 ```
 pinned: checkbox
 url: text
