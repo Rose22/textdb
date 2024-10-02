@@ -49,7 +49,8 @@ import textdb
 # the folder that the database will be stored in
 DB_PATH = "maindb"
 
-# creates the database object and also instantly loads the contents of the database folder, if any. otherwise it just starts out as a blank database.
+# creates the database object and also instantly loads the contents of the database folder into it, if any.
+# otherwise it just starts out as a blank database.
 db = textdb.TextDb(DB_PATH)
 
 # add table "notes" to the database
