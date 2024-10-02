@@ -192,18 +192,28 @@ class TextTable:
     def get_properties(self):
         return self._properties
     def _get_property_index(self, name):
+        """get property index by name"""
+
         for index, prop in enumerate(self._properties):
             if prop.name == name:
                 return index
     def get_property(self, name):
+        """get property object by name"""
+
         return self._properties[self._get_property_index(name)]
     def get_property_names(self):
+        """get a list of all the properties in this table"""
+
         return [prop.name for prop in self._properties]
 
     def add_property(self, property_name, property_type):
+        """add a property to the table"""
+
         self._properties.append(TextTableProperty(property_name, property_type))
         self._update_rows()
     def edit_property(self, property_name, **kwargs):
+        """edit an existing property. use keyword arguments to specify what to edit"""
+
         prop = self.get_property(property_name)
         if not prop:
             return False
@@ -224,14 +234,20 @@ class TextTable:
 
             row.properties = new_properties
     def del_property(self, property_name):
+        """delete a property from the table"""
+
         del(self._properties[self._get_property_index(property_name)])
         self._update_rows()
 
     def add_relation(self, target_table):
+        """add a relation property that points to rows in a different table"""
+
         self._properties.append(TextTableRelation(self, target_table))
         self._update_rows()
 
     def _update_rows(self):
+        """update rows to make sure everything reflects the table structure"""
+
         for row in self._rows:
             add_queue = []
             delete_queue = []
@@ -254,6 +270,8 @@ class TextTable:
                 row.properties[property_name] = prop.default_value
 
     def add_row(self, *args, **kwargs):
+        """add a row to the table. use keyword arguments to specify what values you want to add into the table's properties"""
+
         if len(args) > 0 and len(kwargs) == 0:
             kwargs = {}
             prop_names = ["name"] + self.get_property_names() + ["content"]
@@ -314,9 +332,13 @@ class TextTable:
 
         self._rows.append(row)
     def add(self, *args, **kwargs):
+        """alias for add_row"""
+
         return self.add_row(*args, **kwargs)
 
     def _get_row_index(self, target_property, target_value):
+        """get the index of a row. used internally by the class"""
+
         for index, row in enumerate(self._rows):
             if target_property == "name":
                 if row.name == target_value:
@@ -330,6 +352,8 @@ class TextTable:
 
         return None
     def get_row(self, *args):
+        """get a row. you can either get it by name, or get it by a specified property"""
+
         if len(args) > 1:
             target_property = args[0]
             target_value = args[1]
@@ -343,9 +367,13 @@ class TextTable:
 
         return self._rows[index]
     def get(self, *args):
+        """alias for get_row"""
+
         return self.get_row(*args)
 
     def edit_row(self, row_name, **kwargs):
+        """edit a row. use keyword arguments to specify what to edit"""
+
         row = self.get_row("name", row_name)
         if row is None:
             raise IndexError(f"row {row_name} not found")
@@ -358,15 +386,21 @@ class TextTable:
             if prop_name in row.properties.keys():
                 row.properties[prop_name] = prop_value
     def edit(self, row, **kwargs):
+        """alias for edit_row"""
+
         return self.edit_row(row, **kwargs)
 
     def delete_row(self, row_name):
+        """delete a row from the table"""
+
         index = self._get_row_index("name", row_name)
         if index is None:
             return False
         
         del(self._rows[index])
     def delete(self, row_name):
+        """alias for delete_row"""
+
         return self.delete_row(row_name)
         
     def resolve_path(self):
@@ -460,6 +494,8 @@ class TextDb:
             yield item
 
     def get_table(self, table_name):
+        """get table by name"""
+
         table_names = [table.name for table in self._tables]
         if table_name not in table_names:
             raise ValueError(f"table {key} does not exist")
@@ -473,6 +509,8 @@ class TextDb:
         return repr([table.name for table in self._tables])
 
     def resolve_path(self, obj=None):
+        """resolves the path to the database, table or table row on the filesystem"""
+
         if obj is self or obj is None:
             return(self.name)
         elif type(obj) is TextTable:
@@ -481,18 +519,28 @@ class TextDb:
             return(f"{format_name(self.name)}/{format_name(obj.parent.name)}/{format_name(obj.name)}.md")
 
     def add_table(self, table_name):
+        """add a table into the database"""
+
         self._tables.append(TextTable(self, table_name))
     def add(self, table_name):
+        """alias for add_table"""
+
         return self.add_table(table_name)
     def delete_table(self, table_name):
+        """delete a table from the database"""
+
         for index, table in enumerate(self._tables):
             if table.name == table_name:
                 del(self._tables[index])
                 return
     def delete(self, table_name):
+        """alias for delete_table"""
+
         return self.delete_table(table_name)
 
     def load(self):
+        """load database contents from associated folder"""
+
         filepath = self.resolve_path(self)
         if not os.path.isdir(filepath):
             return False
@@ -510,6 +558,8 @@ class TextDb:
         return self
 
     def save(self):
+        """save database to the database folder"""
+
         required_dirs = [
             self.resolve_path(self),
             f"{self.resolve_path(self)}/.properties/"
