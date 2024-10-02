@@ -278,7 +278,7 @@ class TextTable:
 
         # put content into it's special little section
         if "content" in kwargs.keys():
-            row.content = kwargs['content']
+            row.content = kwargs['content'].strip()
 
         # load the kwargs into the properties of the row
         for prop_name, value in kwargs.items():
@@ -352,7 +352,7 @@ class TextTable:
 
         for prop_name, prop_value in kwargs.items():
             if prop_name == "content":
-                row.content = prop_value
+                row.content = prop_value.strip()
                 continue
 
             if prop_name in row.properties.keys():
