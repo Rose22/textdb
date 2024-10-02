@@ -3,6 +3,9 @@ import shutil
 import yaml
 import datetime
 
+# TODO: implement two-way relations
+# TODO: implement relation auto-update when renaming properties in tables
+
 def format_name(path):
     format_map = {
         " ": "_",
