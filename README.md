@@ -21,6 +21,9 @@ full of *content*
 wow!
 ```
 
+oh yeah, it happens to be using the same kind of files as Obsidian. so it's mostly compatible with it, except for the relations between tables. but it works without obsidian too!
+![image](https://github.com/user-attachments/assets/ca0be86d-de02-42dd-b9f2-0e6e1a3a8552)
+
 the properties of each table is defined in a simple human-readable yaml file, which looks like:
 ```
 pinned: checkbox
@@ -29,6 +32,8 @@ url: text
 yes, that's literally just the name of each property and the type!
 
 it's completely human-readable and future-proof
+
+use this library to make open-source alternatives to Notion and the like, with a plain text database that's future proof and can be taken anywhere
 
 example:
 
