@@ -21,6 +21,8 @@ full of *content*
 wow!
 ```
 
+it can be edited using any text editor, and will still work just fine within the database if you do! any time the database is loaded and then saved using this library, it'll fix any missing properties, remove properties that aren't supposed to be there, and so on.
+
 oh yeah, it happens to be using the same kind of files as Obsidian. so it's mostly compatible with it, except for the relations between tables. but it works without obsidian too!
 ![image](https://github.com/user-attachments/assets/ca0be86d-de02-42dd-b9f2-0e6e1a3a8552)
 
