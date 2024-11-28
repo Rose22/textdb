@@ -91,7 +91,7 @@ db.notes['notacular']
 db.notes.get("notacular")
 
 # all of which will return
->> {'name': 'notacular', 'pinned': True, 'url': 'https://somewebsitesomewhere.com', 'content': <the content we added>}
+# >> {'name': 'notacular', 'pinned': True, 'url': 'https://somewebsitesomewhere.com', 'content': <the content we added>}
 
 # relations?! yes!
 db.add("projects")
