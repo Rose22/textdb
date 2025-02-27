@@ -3,6 +3,7 @@ import shutil
 import yaml
 import datetime
 import debug
+import copy
 
 # TODO: add in proper support for types with extra data, such as relations
 # TODO: implement two-way relations
@@ -20,31 +21,58 @@ def format_name(path):
 
     return path
 
-class CustomType(dict):
-    # hopefully a way to handle yaml conversion of custom types such as relations and selects
+class TextTableCustomType(dict):
+    """
+    a custom type is basically any type that isn't a standard builtin python object.
+    we do some trickery so that we can store pretty much any type we want into yaml files.
+    by using __call__, we can make calling the instance create an instance of the associated builtin python data type. we're basically mimicking builtin types, but just adding an extra data field
+
+    a custom type example would be:
+        options = ['unfinished', 'in progress', 'done']
+        status_type = TextTableCustomType(str, {"options": options})
+
+        # we now have access to the structure data, but we can also instantiate this new custom type,
+        # which will create an instance of the core type:
+        print(status_type.structure['options']) # will print ['unfinished', 'in progress', 'done']
+
+        status = status_type() # status is now an instance of str
+
+        # so we can also use this for type conversion
+        my_bad_var = 99
+        converted = status_type(my_bad_var) # is essentially the same as calling str(my_bad_var)
+
+    code that knows about the extra structure data inside the TextTableCustomType instance, such as user interfaces, can use the extra data to, for example, display a list of options to choose from.
+
+    the TextTable class can store structure data inside yaml files and save and load them, thereby enabling non-builtin types to be stored within yaml files.
+    """
+
     def __init__(self, core_type, structure : dict):
+        """
+        core_type:
+            the python builtin object type that should contain the value of a variable using this type.
+            ex: int, float, str, list
+        structure:
+            a special dict that defines extra data, such as a list of options for a select field, or a target table name.
+            the structure can then be used throughout the code to include extra data along with the type. this can be used internally (as with relations) and in any UI's created for this library
+        """
         self.type = core_type
         self.structure = structure
 
-    def __call__(self):
-        return self.type()
+    def __repr__(self):
+        return f"TextTableCustomType({self.type}, {self.structure})"
+
+    def convert(self, *args):
+        return self.type(*args)
+    def __call__(self, *args):
+        return self.convert(*args)
 
 class TextTablePropertyType:
     """
     table property type. takes a string and converts it to an internal python type
-    ex: "text" becomes str()
-
-    supports custom types, which consist of a core type (what table cols store the value as), and a structure
-    a custom type example would be:
-    options = ['unfinished', 'in progress', 'done']
-    status = CustomType(str, {"options": options})
-
-    custom types are mainly meant to help save these weird types in the yaml files. it's up to the UI to interpret how to display these types and what to do with them.
-
-    a UI would take this custom type, and present it as a list of selecteable options, storing the selected option as a string inside the table column. you could also use an int for this.
-
-    it's made to be easily extensible by just adding more custom types to the typemap
+    ex: "text" becomes str
     """
+
+    # determines what python type each type name should map to
     typemap = {
         "text": str,
         "number": float,
@@ -52,29 +80,29 @@ class TextTablePropertyType:
         "date": datetime.date,
         "time": datetime.time,
         "checkbox": bool,
-        "select": CustomType(int, {"options": []}),
-        "relation": CustomType(list, {"target": str()}),
-        "multiselect": CustomType(list, {"options": []})
+        "select": TextTableCustomType(int, {"options": []}),
+        "relation": TextTableCustomType(list, {"target": str()}),
+        "multiselect": TextTableCustomType(list, {"options": []})
     }
 
-    # draft
-    extra_data = {
-        "select": {"options": str},
-        "relation": {"target_table": list}
-    }
-
-    def __init__(self, type_string : str, structure : dict = None):
+    def __init__(self, type_string : str):
         if type_string not in self.typemap.keys():
             raise ValueError(f"{type_string} is not a valid type. valid types: {', '.join(list(self.typemap.keys()))}")
 
         self.name = type_string
 
         # contains the python type class itself, not an instance. for example, str. it can be called (as self.object()) to create an instance of that python type. it would be the same as calling str()
-        self.object = self.typemap[type_string] 
+        # we create a new copy of the mapped type. it fixes a bug where the typemap instantiation only creates 1 of each custom type, causing references to go out of whack and data to get overwritten
+        self.object = copy.deepcopy(self.typemap[type_string])
 
         self.is_custom = False
-        if isinstance(self.object, CustomType):
+        if isinstance(self.object, TextTableCustomType):
             self.is_custom = True
+
+    def __str__(self):
+        return f"<TextTablePropertyType:{self.name}>"
+    def __repr__(self):
+        return f"TextTablePropertyType(type_string={self.name})"
 
     def convert(self, value):
         converted = None
@@ -110,6 +138,12 @@ class TextTableProperty:
         if structure and self.type.is_custom:
             self.type.object.structure = structure
 
+    def __repr__(self):
+        if self.type.is_custom:
+            return f"<TextTablePropertyCustom:{self.name}>: {self.type.object.structure}"
+        else:
+            return f"<TextTableProperty:{self.name}>"
+
 class TextTableCols(dict):
     """special dict that auto formats the name"""
 
@@ -121,17 +155,20 @@ class TextTableCols(dict):
 
 class TextTableRow:
     def __init__(self, parent_table, name):
-        # cols (columns) are basically dicts of simple key-value pairs
-        # a col looks like:
-        # {"name": "my row", "content": "blahblahblah", "checked": True}
-        # and so on
-        # the typemapping and type verification gets handled by TextTable, because why would i store the type of a col for every row in the table?
+        """
+        cols (columns) are basically dicts of simple key-value pairs
+        a col looks like:
+        {"name": "my row", "content": "blahblahblah", "checked": True}
+        and so on
+        the typemapping and type verification gets handled by TextTable, because why would i store the type of a col for every row in the table?
+        """
+
         self.cols = TextTableCols()
 
         self.parent = parent_table
 
-    def __repr__(self):
-        return repr(self.cols)
+    def __str__(self):
+        return(str(self.cols))
 
     def __getattr__(self, key):
         """l                                the links
@@ -181,6 +218,12 @@ class TextTable:
         # each row has cols that are defined by the table's properties. cols contain the property name and the col value
         self._rows = []
 
+    def __str__(self):
+        output = []
+        for row in self.get_rows():
+            output.append(str(row))
+        return str(output)
+    
     def __iter__(self):
         """lets you use for loops on the table object itself to loop through rows"""
 
@@ -194,13 +237,6 @@ class TextTable:
         """lets you get rows by name like table.examplerow"""
 
         return self.get(key)
-
-    def __repr__(self):
-        names = []
-        for row in self:
-            names.append(f"'{row.cols['name']}'")
-
-        return f"[{', '.join(names)}]"
 
     def get_properties(self):
         return self._properties
@@ -218,6 +254,9 @@ class TextTable:
         """get a list of all the properties in this table"""
 
         return [prop.name for prop in self._properties]
+
+    def get_rows(self):
+        return self._rows
 
     def add_property(self, property_name, property_type, structure=None):
         """add a property to the table"""
@@ -396,13 +435,13 @@ class TextTable:
         index = self._get_row_index("name", row_name)
         if index is None:
             return False
-        
+
         del(self._rows[index])
     def delete(self, row_name):
         """alias for delete_row"""
 
         return self.delete_row(row_name)
-        
+
     def resolve_path(self):
         return self.parent.resolve_path(self)
 
@@ -493,6 +532,13 @@ class TextDb:
     def __iter__(self):
         for item in self._tables:
             yield item
+    def __getitem__(self, key):
+        return self.get_table(key)
+    def __getattr__(self, key):
+        return self.get_table(key)
+
+    def __str__(self):
+        return repr([table.name for table in self._tables])
 
     def get_table_names(self):
         return [table.name for table in self._tables]
@@ -505,14 +551,6 @@ class TextDb:
 
         return(self._tables[table_names.index(table_name)])
 
-    def __getitem__(self, key):
-        return self.get_table(key)
-    def __getattr__(self, key):
-        return self.get_table(key)
-
-    def __repr__(self):
-        return repr([table.name for table in self._tables])
-        
     def get_types(self):
         return TextTablePropertyType.typemap
 
