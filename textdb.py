@@ -2,7 +2,9 @@ import os
 import shutil
 import yaml
 import datetime
+import debug
 
+# TODO: add in proper support for types with extra data, such as relations
 # TODO: implement two-way relations
 # TODO: implement relation auto-update when renaming properties in tables
 
@@ -18,162 +20,152 @@ def format_name(path):
 
     return path
 
-class TextTableRelation():
-    """special table relation property"""
+class CustomType(dict):
+    # hopefully a way to handle yaml conversion of custom types such as relations and selects
+    def __init__(self, core_type, structure : dict):
+        self.type = core_type
+        self.structure = structure
 
-    def __init__(self, source_table, target_table, items=None):
-        self.name = target_table
-        self.type = TextTableRelation
-        self.default_value = None
-        self.source_table = source_table
-        self.target_table = target_table
-        self.type_s = f"relation:{self.target_table}"
-        self._items = []
-        if items:
-            self._items = items
+    def __call__(self):
+        return self.type()
 
-    def __repr__(self):
-        return f"relation:{self.target_table}{repr(self._items)}"
+class TextTablePropertyType:
+    """
+    table property type. takes a string and converts it to an internal python type
+    ex: "text" becomes str()
 
-    def __iter__(self):
-        for item in self._items:
-            yield item
+    supports custom types, which consist of a core type (what table cols store the value as), and a structure
+    a custom type example would be:
+    options = ['unfinished', 'in progress', 'done']
+    status = CustomType(str, {"options": options})
 
-    def __getitem__(self, item_name):
-        if item_name in self._items:
-            return self.source_table.parent.get_table(self.target_table).get(item_name)
-    def __getattr__(self, item_name):
-        return self.__getitem__(item_name)
+    custom types are mainly meant to help save these weird types in the yaml files. it's up to the UI to interpret how to display these types and what to do with them.
 
-    def add(self, item_name):
-        item_name = format_name(item_name)
+    a UI would take this custom type, and present it as a list of selecteable options, storing the selected option as a string inside the table column. you could also use an int for this.
 
-        target_table_obj = self.source_table.parent.get_table(self.target_table)
-        for row in target_table_obj:
-            if row.name == item_name:
-                self._items.append(item_name)
-                return True
-
-        return False
-
-    def delete(self, item_name):
-        item_name = format_name(item_name)
-
-        if item_name in self._items:
-            del(self._items[self._items.index(item_name)])
-            return True
-
-        return False
-
-def relation_representer(dumper, data):
-    return dumper.represent_sequence('!relation', list(data))
-
-def relation_constructor(loader, node):
-    values = loader.construct_sequence(node)
-    return TextTableRelation(None, None, values)
-
-    yaml.SafeLoader.add_constructor('!relation', relation_constructor)
-    yaml.SafeDumper.add_representer(TextTableRelation, relation_representer)
-
-class TextTableProperty:
-    """table property. has an internal map of types, so that the user can specify a type by text, but internally it gets converted to a python type"""
-
+    it's made to be easily extensible by just adding more custom types to the typemap
+    """
     typemap = {
         "text": str,
         "number": float,
-        "date": datetime.datetime,
+        "datetime": datetime.datetime,
+        "date": datetime.date,
+        "time": datetime.time,
         "checkbox": bool,
-        "select": list
+        "select": CustomType(int, {"options": []}),
+        "relation": CustomType(list, {"target": str()}),
+        "multiselect": CustomType(list, {"options": []})
     }
 
-    defaults = {
-        "text": "",
-        "number": 0.0,
-        "date": datetime.datetime,
-        "checkbox": False,
-        "select": []
+    # draft
+    extra_data = {
+        "select": {"options": str},
+        "relation": {"target_table": list}
     }
 
-    def __init__(self, property_name, property_type):
-        self.name = property_name
-        self.type = property_type
-        self.type_s = property_type
+    def __init__(self, type_string : str, structure : dict = None):
+        if type_string not in self.typemap.keys():
+            raise ValueError(f"{type_string} is not a valid type. valid types: {', '.join(list(self.typemap.keys()))}")
 
-    def __str__(self):
-        return self.name
-    def __repr__(self):
-        return(f"('{self.name}', {self.type})")
+        self.name = type_string
 
-    @property
-    def type(self):
-        return self._type
+        # contains the python type class itself, not an instance. for example, str. it can be called (as self.object()) to create an instance of that python type. it would be the same as calling str()
+        self.object = self.typemap[type_string] 
 
-    @type.setter
-    def type(self, property_type):
-        if property_type in self.typemap.keys():
-            self._type = self.typemap[property_type]
-        else:
-            raise ValueError(f"type must be one of the following: {', '.join(self.typemap)}")
+        self.is_custom = False
+        if isinstance(self.object, CustomType):
+            self.is_custom = True
 
-    @property
-    def default_value(self):
-        return self.defaults[self.type_s]
-
-    def convert_from_str(self, value):
+    def convert(self, value):
         converted = None
 
-        match value.lower():
-            case "false":
-                converted = False
-            case "true":
-                converted = True
-            case value.isnumeric():
-                converted = float(value)
+        if value.lower() == "false":
+            converted = False
+        elif value.lower() == "true":
+            converted = True
+        elif value.isnumeric():
+            converted = float(value)
 
         return converted
 
-class TextTableRow(dict):
-    def __init__(self, parent_table, name):
-        super(TextTableRow, self).__init__()
-        # name is a special property that cannot be altered, because it is used as the filename. make sure we format it to a name that can be used on the filesystem.
-        self.name = format_name(name)
-        # also a special property that contains the content below all the user-defined properties
-        self.content = str() 
+    @property
+    def default_value(self):
+        return self.object()
 
-        self.properties = {}
+    @property
+    def structure(self):
+        """makes custom type structures accessible from the type level instead of having to go into the type object"""
+
+        if self.is_custom:
+            return self.object.structure
+        return None
+
+class TextTableProperty:
+    """table property. simply just a set of a name and a TextTablePropertyType"""
+
+    def __init__(self, property_name : str, property_type : str, structure : dict = None):
+        self.name = property_name
+        self.type = TextTablePropertyType(property_type)
+
+        if structure and self.type.is_custom:
+            self.type.object.structure = structure
+
+class TextTableCols(dict):
+    """special dict that auto formats the name"""
+
+    def __setitem__(self, key, value):
+        if key == "name":
+            value = format_name(value)
+
+        return dict.__setitem__(self, key, value)
+
+class TextTableRow:
+    def __init__(self, parent_table, name):
+        # cols (columns) are basically dicts of simple key-value pairs
+        # a col looks like:
+        # {"name": "my row", "content": "blahblahblah", "checked": True}
+        # and so on
+        # the typemapping and type verification gets handled by TextTable, because why would i store the type of a col for every row in the table?
+        self.cols = TextTableCols()
+
         self.parent = parent_table
 
     def __repr__(self):
-        repr_dict = {"name": self.name} | self.properties | {"content": self.content}
-        return repr(repr_dict)
+        return repr(self.cols)
 
-    def __getitem__(self, key):
-        if key in self.properties:
-            return self.properties[key]
-        elif key == "name":
-            return self.name
-        elif key == "content":
-            return self.content
     def __getattr__(self, key):
-        return self.__getitem__(key)
+        """l                                the links
+ets you access row columns as if they are class properties"""
+        return self.cols.__getitem__(key)
+    def __getitem__(self, key):
+        """lets you access row columns as if they are dict keys"""
+        return self.cols.__getitem__(key)
 
     def __iter__(self):
-        for key, value in self.properties.items():
+        """lets you iterate through the object which will just iterate through its stored cols"""
+
+        for key, value in self.cols.items():
             yield (key, value)
-            
+
     def keys(self):
-        return [key for key in self.properties.keys()]
+        return self.cols.keys()
 
     def resolve_path(self):
         return self.parent.parent.resolve_path(self)
 
     def convert_to_markdown(self):
-        if self.properties:
-            return(f"---\n{yaml.safe_dump(self.properties)}---\n{self.content}")
+        if self.cols and self.cols.keys() != TextTable.protected_properties:
+            dump_cols = dict(self.cols)
+            for key in TextTable.protected_properties:
+                del(dump_cols[key])
+
+            return(f"---\n{yaml.safe_dump(dump_cols)}---\n{self.cols['content']}")
         else:
             return(self.content)
 
 class TextTable:
+    protected_properties = ("name", "content")
+
     def __init__(self, parent_db, name):
         self.parent = parent_db
 
@@ -181,21 +173,32 @@ class TextTable:
 
         # each property has a name and a type
         self._properties = []
-        # each row has multiple user assigned properties and a few special system properties
+        # name is a special property that cannot be altered or removed, because it is used as the filename. make sure we format it to a name that can be used on the filesystem.
+        self._properties.append(TextTableProperty("name", "text"))
+        # also a special property that contains the content below all the user-defined properties. this must not be removed because it represents the content portion of a saved markdown file (below the yaml --- block)
+        self._properties.append(TextTableProperty("content", "text"))
+
+        # each row has cols that are defined by the table's properties. cols contain the property name and the col value
         self._rows = []
 
     def __iter__(self):
+        """lets you use for loops on the table object itself to loop through rows"""
+
         for row in self._rows:
             yield row
     def __getitem__(self, key):
+        """lets you get rows by name like table['examplerow']"""
+
         return self.get(key)
     def __getattr__(self, key):
+        """lets you get rows by name like table.examplerow"""
+
         return self.get(key)
 
     def __repr__(self):
         names = []
         for row in self:
-            names.append(f"'{row.name}'")
+            names.append(f"'{row.cols['name']}'")
 
         return f"[{', '.join(names)}]"
 
@@ -216,13 +219,21 @@ class TextTable:
 
         return [prop.name for prop in self._properties]
 
-    def add_property(self, property_name, property_type):
+    def add_property(self, property_name, property_type, structure=None):
         """add a property to the table"""
 
-        self._properties.append(TextTableProperty(property_name, property_type))
+        # don't allow editing protected properties
+        if property_name in self.protected_properties:
+            return False
+
+        self._properties.append(TextTableProperty(property_name, property_type, structure))
         self._update_rows()
     def edit_property(self, property_name, **kwargs):
         """edit an existing property. use keyword arguments to specify what to edit"""
+
+        # don't allow editing protected properties
+        if property_name in self.protected_properties:
+            return False
 
         prop = self.get_property(property_name)
         if not prop:
@@ -235,24 +246,22 @@ class TextTable:
 
         # rename the property across all rows, preserving property order
         for row in self._rows:
-            new_properties = {}
-            for prop_name, prop_value in row.properties.items():
+            new_cols = {}
+            for prop_name in row.cols.keys():
                 if prop_name == property_name:
                     prop_name = kwargs['name']
 
-                new_properties[prop_name] = prop_value
+                new_cols[prop_name] = row.cols[property_name]
 
-            row.properties = new_properties
+            row.cols = new_cols
     def del_property(self, property_name):
         """delete a property from the table"""
 
+        # don't allow deleting protected properties
+        if property_name in self.protected_properties:
+            return False
+
         del(self._properties[self._get_property_index(property_name)])
-        self._update_rows()
-
-    def add_relation(self, target_table):
-        """add a relation property that points to rows in a different table"""
-
-        self._properties.append(TextTableRelation(self, target_table))
         self._update_rows()
 
     def _update_rows(self):
@@ -262,29 +271,26 @@ class TextTable:
             add_queue = []
             delete_queue = []
 
-            for property_name in row.properties.keys():
+            for property_name in row.cols.keys():
                 if property_name not in self.get_property_names():
                     delete_queue.append(property_name)
             for property_name in self.get_property_names():
-                if property_name not in row.properties.keys():
+                if property_name not in row.cols.keys():
                     add_queue.append(property_name)
 
             for property_name in delete_queue:
-                del(row.properties[property_name])
+                del(row.cols[property_name])
             for property_name in add_queue:
                 prop = self.get_property(property_name)
-                if prop.type == TextTableRelation:
-                    row.properties[property_name] = TextTableRelation(self, prop.target_table, [])
-                    continue
 
-                row.properties[property_name] = prop.default_value
+                row.cols[property_name] = prop.type.default_value
 
     def add_row(self, *args, **kwargs):
         """add a row to the table. use keyword arguments to specify what values you want to add into the table's properties"""
 
         if len(args) > 0 and len(kwargs) == 0:
             kwargs = {}
-            prop_names = ["name"] + self.get_property_names() + ["content"]
+            prop_names = self.get_property_names()
 
             for index, arg in enumerate(args):
                 kwargs[prop_names[index]] = arg
@@ -294,24 +300,19 @@ class TextTable:
         if "name" not in kwargs.keys():
             raise ValueError("missing name argument")
 
+        # ensure no duplicate rows allowed
+        for row in self._rows:
+            if row['name'] == format_name(kwargs['name']):
+                return False
+
         row = TextTableRow(self, kwargs['name'])
 
-        # predefine all the properties regardless of content
+        # predefine all the row columns regardless of content
         for prop in self._properties:
-            if prop.type == TextTableRelation:
-                row.properties[prop.name] = TextTableRelation(self, prop.target_table, [])
-                continue
+            row.cols[prop.name] = prop.type.default_value
 
-            row.properties[prop.name] = prop.default_value
-
-        # put content into it's special little section
-        if "content" in kwargs.keys():
-            row.content = kwargs['content'].strip()
-
-        # load the kwargs into the properties of the row
+        # load the kwargs into the cols of the new row
         for prop_name, value in kwargs.items():
-            if prop_name in ["name", "content"]:
-                continue
             if prop_name not in self.get_property_names():
                 continue
 
@@ -320,25 +321,17 @@ class TextTable:
             if not prop:
                 raise ValueError(f"property {prop_name} does not exist")
 
-            if type(value) != prop.type: 
+            if type(value) != prop.type.object: 
                 if type(value) is str:
-                    value = prop.convert_from_str(value)
-                elif prop.type is TextTableRelation:
-                    # this is a special type of property with extra data..
-                    if value is None:
-                        continue
-
-                    filtered_relation_values = []
-                    for name in value:
-                        filtered_relation_values.append(format_name(name))
-
-                    value = TextTableRelation(self, prop.target_table, filtered_relation_values)
+                    value = prop.type.convert(value)
+                elif prop.type.is_custom:
+                    value = value
                 elif value is None:
                     pass
                 else:
                     raise TypeError(f"{prop.name} should be of type {prop.type}, but is {type(value)}") 
 
-            row.properties[prop_name] = value
+            row.cols[prop_name] = value
 
         self._rows.append(row)
     def add(self, *args, **kwargs):
@@ -346,24 +339,13 @@ class TextTable:
 
         return self.add_row(*args, **kwargs)
 
-    def _get_row_index(self, target_property, target_value):
-        """get the index of a row. used internally by the class"""
+    def _get_row_index(self, *args):
+        """
+        get the index of a row. used internally by the class
+        you can either get it by name, or get it by a specified property
+        """
 
-        for index, row in enumerate(self._rows):
-            if target_property == "name":
-                if row.name == target_value:
-                    return index
-            elif target_property == "content":
-                if row.content == target_value:
-                    return index
-            else:
-                if row.properties[target_property] == target_value:
-                    return index
-
-        return None
-    def get_row(self, *args):
-        """get a row. you can either get it by name, or get it by a specified property"""
-
+        # when there's 1 argument, use the name as the target property. else, use arg 1 as the target property, arg 2 as the target value
         if len(args) > 1:
             target_property = args[0]
             target_value = args[1]
@@ -371,7 +353,15 @@ class TextTable:
             target_property = "name"
             target_value = args[0]
 
-        index = self._get_row_index(target_property, target_value)
+        for index, row in enumerate(self._rows):
+            if row.cols[target_property] == target_value:
+                return index
+
+        return None
+    def get_row(self, args):
+        """fetch a row object using _get_row_index()"""
+
+        index = self._get_row_index(args)
         if index is None:
             return None
 
@@ -384,17 +374,17 @@ class TextTable:
     def edit_row(self, row_name, **kwargs):
         """edit a row. use keyword arguments to specify what to edit"""
 
-        row = self.get_row("name", row_name)
+        row = self.get_row(row_name)
         if row is None:
             raise IndexError(f"row {row_name} not found")
-
+        
         for prop_name, prop_value in kwargs.items():
             if prop_name == "content":
                 row.content = prop_value.strip()
                 continue
 
-            if prop_name in row.properties.keys():
-                row.properties[prop_name] = prop_value
+            if prop_name in row.cols.keys():
+                row.cols[prop_name] = prop_value
     def edit(self, row, **kwargs):
         """alias for edit_row"""
 
@@ -417,23 +407,24 @@ class TextTable:
         return self.parent.resolve_path(self)
 
     def load(self):
-        # load row properties from the appropriate file
+        """load the table with all appropriate data according to the stored paths"""
+
         self.load_properties()
 
         filelist = os.listdir(self.resolve_path())
         for filename in filelist:
             filepath = f"{self.resolve_path()}/{filename}"
-            self.load_values(filepath)
+            self.load_row_file(filepath)
 
         return self
 
-
     def load_properties(self):
+        """load table properties from the appropriate yaml file"""
+
         filepath = f"{self.parent.resolve_path()}/.properties/{self.name}.yaml"
 
         if not os.path.isfile(filepath):
             return False
-            #raise FileNotFoundError(f"{filepath} not found! can't load properties")
 
         with open(filepath, 'r') as f:
            file = f.read()
@@ -444,14 +435,19 @@ class TextTable:
         loaded_properties = yaml.safe_load(file)
 
         for key, value in loaded_properties.items():
-            if type(value) is str and value.startswith("relation:"):
-                # this is a relation. it's a different beast to handle!
-                target_table = value[9:] #TODO: find a safer way to do this
-                self.add_relation(target_table)
-            else:
-                self.add_property(key, value)
+            # custom type
+            type_name = value
+            structure = None
 
-    def load_values(self, filepath):
+            if isinstance(value, dict):
+                type_name = value['type']
+                structure = value['structure']
+
+            self.add_property(key, type_name, structure)
+
+    def load_row_file(self, filepath):
+        """load row from a markdown file"""
+
         yaml_found = False
         yaml_end = 0
 
@@ -482,13 +478,6 @@ class TextTable:
         content = "\n".join(content)
         values['content'] = content
 
-        # yaml.safe_load doesn't fully load the TextTableRelation type correctly
-        # this fixes it and adds the target_table field back in
-        for key, value in values.items():
-            if type(value) is TextTableRelation:
-                value.source_table = self
-                value.target_table = self._properties[self._get_property_index(key)].target_table
-
         self.add_row(**values)
 
 class TextDb:
@@ -505,17 +494,17 @@ class TextDb:
         for item in self._tables:
             yield item
 
+    def get_table_names(self):
+        return [table.name for table in self._tables]
     def get_table(self, table_name):
         """get table by name"""
 
-        table_names = [table.name for table in self._tables]
+        table_names = self.get_table_names()
         if table_name not in table_names:
             return None
-        return(self._tables[table_names.index(table_name)])
-    def get(self, *args):
-        """alias for get_table"""
 
-        return self.get_table(*args)
+        return(self._tables[table_names.index(table_name)])
+
     def __getitem__(self, key):
         return self.get_table(key)
     def __getattr__(self, key):
@@ -525,7 +514,7 @@ class TextDb:
         return repr([table.name for table in self._tables])
         
     def get_types(self):
-        return TextTableProperty.typemap
+        return TextTablePropertyType.typemap
 
     def resolve_path(self, obj=None):
         """resolves the path to the database, table or table row on the filesystem"""
@@ -541,10 +530,7 @@ class TextDb:
         """add a table into the database"""
 
         self._tables.append(TextTable(self, table_name))
-    def add(self, table_name):
-        """alias for add_table"""
 
-        return self.add_table(table_name)
     def delete_table(self, table_name):
         """delete a table from the database"""
 
@@ -552,10 +538,6 @@ class TextDb:
             if table.name == table_name:
                 del(self._tables[index])
                 return
-    def delete(self, table_name):
-        """alias for delete_table"""
-
-        return self.delete_table(table_name)
 
     def load(self):
         """load database contents from associated folder"""
@@ -593,26 +575,25 @@ class TextDb:
         # if any tables have been deleted, delete them off the filesystem
         # likewise for table rows
         file_list = os.listdir(self.resolve_path(self))
-        for table_name in file_list:
-            if os.path.isdir(f"{self.path}/{table_name}"):
-                if table_name == ".properties":
+        for folder_name in file_list:
+            if os.path.isdir(f"{self.path}/{folder_name}"):
+                if folder_name == ".properties":
                     continue
 
-                if table_name not in [table.name for table in self._tables]:
-                    shutil.rmtree(f"{self.path}/{table_name}")
-                    prop_file = f"{self.path}/.properties/{table_name}.yaml"
+                if folder_name not in self.get_table_names():
+                    shutil.rmtree(f"{self.path}/{folder_name}")
+                    prop_file = f"{self.path}/.properties/{folder_name}.yaml"
                     if os.path.isfile(prop_file):
                         os.remove(prop_file)
-                        
+
                 row_names = []
-                for row in self.get_table(table_name):
-                    row_names.append(row.name)
-                    
-                for row_filename in os.listdir(f"{self.path}/{table_name}"):
+                for row in self.get_table(folder_name):
+                    row_names.append(row.cols['name'])
+
+                for row_filename in os.listdir(f"{self.path}/{folder_name}"):
                     row_name = os.path.splitext(row_filename)[0]
                     if row_name not in row_names:
-                        os.remove(f"{self.path}/{table_name}/{row_filename}")
-                        
+                        os.remove(f"{self.path}/{folder_name}/{row_filename}")
 
         for table in self._tables:
             if not os.path.exists(self.resolve_path(table)):
@@ -621,7 +602,11 @@ class TextDb:
             with open(f"{self.resolve_path(self)}/.properties/{table.name}.yaml", 'w') as f:
                 properties_simple = {}
                 for prop in table.get_properties():
-                    properties_simple[prop.name] = prop.type_s
+                    # custom type support
+                    if prop.type.is_custom:
+                        properties_simple[prop.name] = {"type": prop.type.name, "structure": prop.type.object.structure}
+                    else:
+                        properties_simple[prop.name] = prop.type.name
 
                 f.write(yaml.dump(properties_simple))
 
@@ -631,7 +616,19 @@ class TextDb:
 
         return True
 
-    def fix(self):
+    def reload(self):
         """if the markdown files are edited by hand, this will update any properties"""
+
         self.load()
         self.save()
+
+    def get(self, *args):
+        """alias for get_table"""
+        return self.get_table(*args)
+    def add(self, table_name):
+        """alias for add_table"""
+        return self.add_table(table_name)
+    def delete(self, table_name):
+        """alias for delete_table"""
+
+        return self.delete_table(table_name)
