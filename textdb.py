@@ -72,8 +72,8 @@ def relation_constructor(loader, node):
     values = loader.construct_sequence(node)
     return TextTableRelation(None, None, values)
 
-yaml.SafeLoader.add_constructor('!relation', relation_constructor)
-yaml.SafeDumper.add_representer(TextTableRelation, relation_representer)
+    yaml.SafeLoader.add_constructor('!relation', relation_constructor)
+    yaml.SafeDumper.add_representer(TextTableRelation, relation_representer)
 
 class TextTableProperty:
     """table property. has an internal map of types, so that the user can specify a type by text, but internally it gets converted to a python type"""
@@ -150,12 +150,19 @@ class TextTableRow(dict):
     def __getitem__(self, key):
         if key in self.properties:
             return self.properties[key]
+        elif key == "name":
+            return self.name
+        elif key == "content":
+            return self.content
     def __getattr__(self, key):
         return self.__getitem__(key)
 
     def __iter__(self):
         for key, value in self.properties.items():
             yield (key, value)
+            
+    def keys(self):
+        return [key for key in self.properties.keys()]
 
     def resolve_path(self):
         return self.parent.parent.resolve_path(self)
@@ -425,7 +432,8 @@ class TextTable:
         filepath = f"{self.parent.resolve_path()}/.properties/{self.name}.yaml"
 
         if not os.path.isfile(filepath):
-            raise FileNotFoundError(f"{filepath} not found! can't load properties")
+            return False
+            #raise FileNotFoundError(f"{filepath} not found! can't load properties")
 
         with open(filepath, 'r') as f:
            file = f.read()
@@ -486,8 +494,9 @@ class TextTable:
 class TextDb:
     """a database system that uses plain system folders as the tables, markdown files as the rows, and a properties.yaml file as the defined properties (columns) for a table"""
 
-    def __init__(self, name):
-        self.name = name
+    def __init__(self, path):
+        self.path = path
+        self.name = os.path.basename(self.path)
         self._tables = []
 
         self.load()
@@ -501,8 +510,12 @@ class TextDb:
 
         table_names = [table.name for table in self._tables]
         if table_name not in table_names:
-            raise ValueError(f"table {key} does not exist")
+            return None
         return(self._tables[table_names.index(table_name)])
+    def get(self, *args):
+        """alias for get_table"""
+
+        return self.get_table(*args)
     def __getitem__(self, key):
         return self.get_table(key)
     def __getattr__(self, key):
@@ -510,16 +523,19 @@ class TextDb:
 
     def __repr__(self):
         return repr([table.name for table in self._tables])
+        
+    def get_types(self):
+        return TextTableProperty.typemap
 
     def resolve_path(self, obj=None):
         """resolves the path to the database, table or table row on the filesystem"""
 
         if obj is self or obj is None:
-            return(self.name)
+            return(self.path)
         elif type(obj) is TextTable:
-            return(f"{format_name(self.name)}/{format_name(obj.name)}")
+            return(f"{self.path}/{format_name(obj.name)}")
         elif type(obj) is TextTableRow:
-            return(f"{format_name(self.name)}/{format_name(obj.parent.name)}/{format_name(obj.name)}.md")
+            return(f"{self.path}/{format_name(obj.parent.name)}/{format_name(obj.name)}.md")
 
     def add_table(self, table_name):
         """add a table into the database"""
@@ -543,6 +559,9 @@ class TextDb:
 
     def load(self):
         """load database contents from associated folder"""
+        
+        # start with a blank slate
+        self._tables = []
 
         filepath = self.resolve_path(self)
         if not os.path.isdir(filepath):
@@ -572,17 +591,28 @@ class TextDb:
                 os.mkdir(required_dir)
 
         # if any tables have been deleted, delete them off the filesystem
+        # likewise for table rows
         file_list = os.listdir(self.resolve_path(self))
         for table_name in file_list:
-            if os.path.isdir(f"{self.name}/{table_name}"):
+            if os.path.isdir(f"{self.path}/{table_name}"):
                 if table_name == ".properties":
                     continue
 
                 if table_name not in [table.name for table in self._tables]:
-                    shutil.rmtree(f"{self.name}/{table_name}")
-                    prop_file = f"{self.name}/.properties/{table_name}.yaml"
+                    shutil.rmtree(f"{self.path}/{table_name}")
+                    prop_file = f"{self.path}/.properties/{table_name}.yaml"
                     if os.path.isfile(prop_file):
                         os.remove(prop_file)
+                        
+                row_names = []
+                for row in self.get_table(table_name):
+                    row_names.append(row.name)
+                    
+                for row_filename in os.listdir(f"{self.path}/{table_name}"):
+                    row_name = os.path.splitext(row_filename)[0]
+                    if row_name not in row_names:
+                        os.remove(f"{self.path}/{table_name}/{row_filename}")
+                        
 
         for table in self._tables:
             if not os.path.exists(self.resolve_path(table)):
